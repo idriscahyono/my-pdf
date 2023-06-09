@@ -13,12 +13,13 @@ func main() {
 	wd, _ := workDir()
 	//inputPath := wd + "/input/my-sample.pdf"
 	//outputPath := wd + "/output/my-sample-output.pdf"
-	//watermarkPath := wd + "/assets/qrcode.png"
-	//
-	//resWatermark, err := generateQrCode(watermarkPath)
-	//if err != nil {
-	//	fmt.Println("err generateQrCode", err)
-	//}
+	watermarkPath := wd + "/assets/qrcode.png"
+	overlayPath := wd + "/assets/overlay.png"
+
+	_, err := generateQrCode(watermarkPath, overlayPath)
+	if err != nil {
+		fmt.Println("err generateQrCode", err)
+	}
 	//
 	//err = addWatermarkImage(inputPath, outputPath, resWatermark)
 	//if err != nil {
@@ -39,20 +40,21 @@ func main() {
 	//	fmt.Println("err docxToPdf", err)
 	//}
 
-	inputPath := wd + "/output/sample_doc.pdf"
-	outputPath := wd + "/output/thumbnail/tm.jpg"
-	err := pdfThumbnail(inputPath, outputPath)
-	if err != nil {
-		fmt.Println("err pdfThumbnail", err)
-	}
+	//inputPath := wd + "/output/sample_doc.pdf"
+	//outputPath := wd + "/output/thumbnail/sample_doc.jpg"
+	//err := pdfThumbnail(inputPath, outputPath)
+	//if err != nil {
+	//	fmt.Println("err pdfThumbnail", err)
+	//}
 
 	fmt.Println("done")
 }
 
 func pdfThumbnail(inputPath, outputPath string) error {
 	fmt.Println("pdfThumbnail")
-	command := "pdfcpu"
-	args := []string{"extract", "images", "-verbose=false", "-outdir", outputPath, inputPath}
+
+	command := "convert"
+	args := []string{"-density", "300", inputPath, "-resize", "720x360^", "-extent", "720x360", "-define", "jpg:extent=100KB", "-strip", "-trim", "+repage", outputPath}
 	cmd := exec.Command(command, args...)
 
 	_, err := cmd.CombinedOutput()
@@ -66,12 +68,6 @@ func pdfThumbnail(inputPath, outputPath string) error {
 
 func docxToPdf(inputPath, outputPath string) error {
 	fmt.Println("docxToPdf")
-	//absPath, err := filepath.Abs(inputPath)
-	//if err != nil {
-	//	fmt.Println(err)
-	//}
-	//
-	//_ = absPath
 
 	command := "soffice"
 	args := []string{"--headless", "--convert-to", "pdf", "--outdir", outputPath, inputPath}
@@ -87,6 +83,7 @@ func docxToPdf(inputPath, outputPath string) error {
 
 func imageToPdf(inputPath, outputPath string) error {
 	fmt.Println("imageToPdf")
+
 	command := "convert"
 	args := []string{inputPath, outputPath}
 	cmd := exec.Command(command, args...)
@@ -99,31 +96,53 @@ func imageToPdf(inputPath, outputPath string) error {
 	return nil
 }
 
-func generateQrCode(watermarkPath string) (string, error) {
+func generateQrCode(watermarkPath, overlayPath string) (*string, error) {
 	fmt.Println("generateQrCode")
+
 	qrCode, err := qr.Encode("https://www.idriscahyono.com/", qr.M, qr.Auto)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	qrCode, err = barcode.Scale(qrCode, 100, 100)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	file, err := os.Create(watermarkPath)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer file.Close()
 
 	png.Encode(file, qrCode)
 
-	return watermarkPath, err
+	res, err := addLogoQrCode(watermarkPath, overlayPath)
+	if err != nil {
+		return nil, err
+	}
+
+	return res, err
+}
+
+func addLogoQrCode(inputPath, overlayPath string) (*string, error) {
+	fmt.Println("addLogoQrCode")
+
+	command := "convert"
+	args := []string{inputPath, "-gravity", "center", overlayPath, "-composite", inputPath}
+	cmd := exec.Command(command, args...)
+
+	_, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, err
+	}
+
+	return &inputPath, err
 }
 
 func addWatermarkImage(inputPath, outputPath, watermarkImage string) error {
 	fmt.Println("addWatermarkImage")
+
 	command := "pdfcpu"
 	args := []string{"watermark", "add", "-mode", "image", "--", watermarkImage, "sc:1 abs, rot:0, pos:br", inputPath, outputPath}
 	cmd := exec.Command(command, args...)
@@ -138,6 +157,7 @@ func addWatermarkImage(inputPath, outputPath, watermarkImage string) error {
 
 func workDir() (string, error) {
 	fmt.Println("getWorkDir")
+
 	wd, err := os.Getwd()
 	if err != nil {
 		return wd, err
