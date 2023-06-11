@@ -4,70 +4,158 @@ import (
 	"fmt"
 	"github.com/boombuler/barcode"
 	"github.com/boombuler/barcode/qr"
+	"github.com/google/uuid"
 	"image/png"
+	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 )
 
 func main() {
-	wd, _ := workDir()
-	//inputPath := wd + "/input/my-sample.pdf"
-	//outputPath := wd + "/output/my-sample-output.pdf"
-	watermarkPath := wd + "/assets/qrcode.png"
-	overlayPath := wd + "/assets/overlay.png"
+	var fileType string
+	var err error
 
-	_, err := generateQrCode(watermarkPath, overlayPath)
-	if err != nil {
-		fmt.Println("err generateQrCode", err)
+	wd := workDir()
+	inputPath := wd + "/input/docx_sample.docx"
+
+	extension := filepath.Ext(inputPath)
+	switch extension {
+	case ".pdf":
+		fileType = "pdf"
+	case ".docx":
+		fileType = "docx"
+	case ".jpg", ".jpeg", ".png":
+		fileType = "image"
+	default:
+		panic("Unknown file type")
 	}
-	//
-	//err = addWatermarkImage(inputPath, outputPath, resWatermark)
-	//if err != nil {
-	//	fmt.Println("err addWatermarkImage", err)
-	//}
 
-	//inputPath := wd + "/input/logo-privy.png"
-	//outputPath := wd + "/output/output.pdf"
-	//err := imageToPdf(inputPath, outputPath)
-	//if err != nil {
-	//	fmt.Println("err imageToPdf", err)
-	//}
+	if fileType == "pdf" {
+		copyDst := "/output/"
+		resCopyFile, err := copyFile(inputPath, copyDst)
+		if err != nil {
+			panic(fmt.Sprintf("err copyFile %s", err))
+		}
 
-	//inputPath := wd + "/input/sample_doc.docx"
-	//outputPath := wd + "/output/"
-	//err := docxToPdf(inputPath, outputPath)
-	//if err != nil {
-	//	fmt.Println("err docxToPdf", err)
-	//}
+		inputPath = *resCopyFile
+	}
 
-	//inputPath := wd + "/output/sample_doc.pdf"
-	//outputPath := wd + "/output/thumbnail/sample_doc.jpg"
-	//err := pdfThumbnail(inputPath, outputPath)
-	//if err != nil {
-	//	fmt.Println("err pdfThumbnail", err)
-	//}
+	if fileType == "image" {
+		resImageToPdf, err := imageToPdf(inputPath)
+		if err != nil {
+			panic(fmt.Sprintf("err imageToPdf %s", err))
+		}
+
+		inputPath = *resImageToPdf
+	}
+
+	if fileType == "docx" {
+		resDocxToPdf, err := docxToPdf(inputPath)
+		if err != nil {
+			panic(fmt.Sprintf("err docxToPdf %s", err))
+		}
+
+		inputPath = *resDocxToPdf
+	}
+
+	resWatermark, err := generateQrCode()
+	if err != nil {
+		panic(fmt.Sprintf("err generateQrCode %s", err))
+	}
+
+	err = addWatermarkPdf(inputPath, *resWatermark)
+	if err != nil {
+		panic(fmt.Sprintf("err addWatermarkPdf %s", err))
+	}
+
+	err = overrideMetadata(inputPath)
+	if err != nil {
+		fmt.Println("err overrideMetadata", err)
+	}
+
+	err = pdfThumbnail(inputPath)
+	if err != nil {
+		fmt.Println("err pdfThumbnail", err)
+	}
 
 	fmt.Println("done")
 }
 
-func pdfThumbnail(inputPath, outputPath string) error {
-	fmt.Println("pdfThumbnail")
+func copyFile(inputPath, outputPath string) (*string, error) {
 
-	command := "convert"
-	args := []string{"-density", "300", inputPath, "-resize", "720x360^", "-extent", "720x360", "-define", "jpg:extent=100KB", "-strip", "-trim", "+repage", outputPath}
+	wd := workDir()
+	fileName := filepath.Base(inputPath)
+	outputPath = wd + outputPath + fileName
+
+	source, err := os.Open(inputPath)
+	if err != nil {
+		return nil, err
+	}
+	defer source.Close()
+
+	destination, err := os.Create(outputPath)
+	if err != nil {
+		return nil, err
+	}
+	defer destination.Close()
+
+	_, err = io.Copy(destination, source)
+	if err != nil {
+		return nil, err
+	}
+
+	return &outputPath, nil
+}
+
+func overrideMetadata(inputPath string) error {
+	fmt.Println("overrideMetadata")
+
+	properties := []string{
+		"Title=My PDF Idris",
+		"Author=Idris",
+	}
+	command := "pdfcpu"
+	args := []string{"properties", "add", inputPath}
+	args = append(args, properties...)
 	cmd := exec.Command(command, args...)
 
 	_, err := cmd.CombinedOutput()
 	if err != nil {
-		fmt.Println("line 60", err)
 		return err
 	}
 
 	return nil
 }
 
-func docxToPdf(inputPath, outputPath string) error {
+func pdfThumbnail(inputPath string) error {
+	fmt.Println("pdfThumbnail")
+
+	wd := workDir()
+	outputPath := wd + "/output/thumbnail/"
+
+	fileName := filepath.Base(inputPath)
+	outputPath = outputPath + strings.TrimSuffix(fileName, filepath.Ext(fileName)) + "-thumb" + ".jpg"
+
+	command := "convert"
+	args := []string{"-density", "300", "-trim", inputPath + "[0]", "-resize", "720x360^", "-extent", "720x360", "-define", "jpg:extent=100KB", "-strip", "-trim", "+repage", outputPath}
+	cmd := exec.Command(command, args...)
+
+	_, err := cmd.CombinedOutput()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func docxToPdf(inputPath string) (*string, error) {
 	fmt.Println("docxToPdf")
+
+	wd := workDir()
+	fileName := filepath.Base(inputPath)
+	outputPath := wd + "/output/"
 
 	command := "soffice"
 	args := []string{"--headless", "--convert-to", "pdf", "--outdir", outputPath, inputPath}
@@ -75,31 +163,42 @@ func docxToPdf(inputPath, outputPath string) error {
 
 	_, err := cmd.CombinedOutput()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	output := outputPath + strings.TrimSuffix(fileName, filepath.Ext(fileName)) + ".pdf"
+	return &output, nil
 }
 
-func imageToPdf(inputPath, outputPath string) error {
+func imageToPdf(inputPath string) (*string, error) {
 	fmt.Println("imageToPdf")
 
+	wd := workDir()
+	fileName := filepath.Base(inputPath)
+	outputPath := wd + "/output/" + strings.TrimSuffix(fileName, filepath.Ext(fileName)) + ".pdf"
+
 	command := "convert"
-	args := []string{inputPath, outputPath}
+	args := []string{inputPath, "-page", fmt.Sprintf("%dx%d", 595, 842), outputPath}
 	cmd := exec.Command(command, args...)
 
 	_, err := cmd.CombinedOutput()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return &outputPath, nil
 }
 
-func generateQrCode(watermarkPath, overlayPath string) (*string, error) {
+func generateQrCode() (*string, error) {
 	fmt.Println("generateQrCode")
 
-	qrCode, err := qr.Encode("https://www.idriscahyono.com/", qr.M, qr.Auto)
+	wd := workDir()
+	overlayPath := wd + "/assets/overlay.png"
+	outputQrPath := wd + "/output/qrcode/qrcode.png"
+
+	content := fmt.Sprintf("https://privy.id/verify/%s", uuid.New())
+
+	qrCode, err := qr.Encode(content, qr.M, qr.Auto)
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +208,7 @@ func generateQrCode(watermarkPath, overlayPath string) (*string, error) {
 		return nil, err
 	}
 
-	file, err := os.Create(watermarkPath)
+	file, err := os.Create(outputQrPath)
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +216,7 @@ func generateQrCode(watermarkPath, overlayPath string) (*string, error) {
 
 	png.Encode(file, qrCode)
 
-	res, err := addLogoQrCode(watermarkPath, overlayPath)
+	res, err := addLogoQrCode(outputQrPath, overlayPath)
 	if err != nil {
 		return nil, err
 	}
@@ -140,28 +239,29 @@ func addLogoQrCode(inputPath, overlayPath string) (*string, error) {
 	return &inputPath, err
 }
 
-func addWatermarkImage(inputPath, outputPath, watermarkImage string) error {
+func addWatermarkPdf(inputPath, watermarkImage string) error {
 	fmt.Println("addWatermarkImage")
 
+	pos := []string{"sc:1 abs, rot:0, pos:br", "sc:1 abs, rot:0, pos:bl", "sc:1 abs, rot:0, pos:tl", "sc:1 abs, rot:0, pos:tr"}
 	command := "pdfcpu"
-	args := []string{"watermark", "add", "-mode", "image", "--", watermarkImage, "sc:1 abs, rot:0, pos:br", inputPath, outputPath}
-	cmd := exec.Command(command, args...)
+	for _, p := range pos {
+		args := []string{"watermark", "add", "-mode", "image", "--", watermarkImage, p, inputPath, inputPath}
+		cmd := exec.Command(command, args...)
 
-	_, err := cmd.CombinedOutput()
-	if err != nil {
-		return err
+		_, err := cmd.CombinedOutput()
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
 }
 
-func workDir() (string, error) {
-	fmt.Println("getWorkDir")
-
+func workDir() string {
 	wd, err := os.Getwd()
 	if err != nil {
-		return wd, err
+		panic(fmt.Sprintf("err workDir %s", err))
 	}
 
-	return wd, err
+	return wd
 }
